@@ -47,3 +47,35 @@ async with get_client(model) as client:
 
 The main public entry points are `get_response`, `get_streaming_response` and
 `get_structured_response`.
+
+## Publishing a new version
+
+The [release workflow](.github/workflows/release.yml) publishes version tags to
+PyPI using trusted publishing, so it does not store a PyPI API token. Before
+starting a release, commit all changes that should be included and make sure the
+working tree is clean.
+
+For the next patch release:
+
+```bash
+uv version --bump patch
+version=$(uv version --short)
+
+uv run pytest
+uv run pre-commit run --all-files
+
+git add pyproject.toml uv.lock
+git commit -m "Release version $version"
+git push origin main
+
+git tag -a "v$version" -m "v$version"
+git push origin "v$version"
+```
+
+Pushing the tag starts the workflow. It runs the tests, builds and installs the
+wheel and source distribution, generates attestations, and publishes the files
+to PyPI.
+
+Use `uv version --bump minor` or `uv version --bump major` when appropriate. The
+tag must match the version in `pyproject.toml`, with a `v` prefix. PyPI release
+versions are immutable, so every release needs a new version.
