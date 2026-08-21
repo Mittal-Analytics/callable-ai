@@ -1,6 +1,6 @@
-from maai.costing import get_abs_cost, parse_responses_usage
-from maai.models import AIModel
-from maai.responses import (
+from mai.costing import get_abs_cost, parse_responses_usage
+from mai.models import AIModel
+from mai.responses import (
     AnnotationToolCallURL,
     Messages,
     StreamingResponseChunk,

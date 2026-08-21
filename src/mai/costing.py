@@ -1,7 +1,7 @@
 from openai.types.responses.response_usage import ResponseUsage
 
-from maai.models import AIModel
-from maai.openrouter import OpenRouterCompletionUsage
+from mai.models import AIModel
+from mai.openrouter import OpenRouterCompletionUsage
 
 
 def parse_responses_usage(responses_usage: ResponseUsage) -> OpenRouterCompletionUsage:

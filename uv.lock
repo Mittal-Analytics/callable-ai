@@ -246,39 +246,6 @@ wheels = [
 ]
 
 [[package]]
-name = "maai"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "dj-evals" },
-    { name = "django" },
-    { name = "openai" },
-    { name = "pydantic" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "dj-evals", specifier = ">=0.6,<0.7" },
-    { name = "django", specifier = ">=5.2,<6.2" },
-    { name = "openai", specifier = ">=2.38,<3" },
-    { name = "pydantic", specifier = ">=2.12,<3" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pre-commit", specifier = ">=4.6.2" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-]
-
-[[package]]
 name = "nodeenv"
 version = "1.10.0"
 source = { registry = "https://pypi.org/simple" }
@@ -347,6 +314,39 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/74/89/1f3e8e1fc3e97de0fa963495832f581f025f29471602a309e48808244292/pre_commit-4.6.2.tar.gz", hash = "sha256:8f5d7bfb021ecdbcd9d49d89847082dd24172ccde534390081a679ad046e2441", size = 198670, upload-time = "2026-08-10T22:07:18.421Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/45/e2/bbb7129c9e7999a6b8ee9cca3b66486c25c423ab5a75f34071798b74ce94/pre_commit-4.6.2-py2.py3-none-any.whl", hash = "sha256:e2dde9a75d3bce11bd3831c26d134df00a2803c1d818be6a0383c3dcda25dc4e", size = 226202, upload-time = "2026-08-10T22:07:16.942Z" },
+]
+
+[[package]]
+name = "py-mai"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "dj-evals" },
+    { name = "django" },
+    { name = "openai" },
+    { name = "pydantic" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "dj-evals", specifier = ">=0.6,<0.7" },
+    { name = "django", specifier = ">=5.2,<6.2" },
+    { name = "openai", specifier = ">=2.38,<3" },
+    { name = "pydantic", specifier = ">=2.12,<3" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pre-commit", specifier = ">=4.6.2" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
 ]
 
 [[package]]

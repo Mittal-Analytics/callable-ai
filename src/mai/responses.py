@@ -48,10 +48,10 @@ from openai.types.responses.response_output_text_param import (
 )
 from pydantic import BaseModel, ValidationError
 
-from maai import compatibility
-from maai.costing import get_abs_cost, parse_responses_usage
-from maai.models import AIModel
-from maai.openrouter import (
+from mai import compatibility
+from mai.costing import get_abs_cost, parse_responses_usage
+from mai.models import AIModel
+from mai.openrouter import (
     OpenRouterChatCompletionChunk,
     OpenRouterCompletionUsage,
     OpenRouterReasoningDetail,
