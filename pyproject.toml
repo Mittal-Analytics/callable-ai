@@ -1,5 +1,5 @@
 [project]
-name = "py-mai"
+name = "mittal-ai"
 version = "0.1.0"
 description = "Mittal Analytics AI harness"
 readme = "README.md"
@@ -17,7 +17,7 @@ requires = ["uv_build>=0.9.26,<0.13.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-module-name = "mai"
+module-name = "mittal_ai"
 
 [dependency-groups]
 dev = [

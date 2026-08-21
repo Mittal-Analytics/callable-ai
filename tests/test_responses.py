@@ -3,7 +3,7 @@ from contextlib import aclosing
 from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import Choice, ChoiceDelta
 
-from mai import AIModel, get_streaming_response
+from mittal_ai import AIModel, get_streaming_response
 
 
 class MockStream:
@@ -49,7 +49,7 @@ class MockClient:
 async def test_closing_stream_stops_response_and_closes_client(monkeypatch):
     stream = MockStream()
     client = MockClient(stream)
-    monkeypatch.setattr("mai.responses.get_client", lambda _model: client)
+    monkeypatch.setattr("mittal_ai.responses.get_client", lambda _model: client)
     model = AIModel(
         name="test-model",
         api_key="secret",

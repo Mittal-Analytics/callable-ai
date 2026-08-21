@@ -8,7 +8,7 @@ from openai.types.responses.parsed_response import (
 )
 from pydantic import BaseModel
 
-from mai.models import AIModel
+from mittal_ai.models import AIModel
 
 # Keeps the parsed response type tied to the Pydantic schema passed in.
 PydanticModel = TypeVar("PydanticModel", bound=BaseModel)

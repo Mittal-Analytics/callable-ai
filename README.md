@@ -1,7 +1,7 @@
-# py-mai
+# mittal-ai
 
-Mittal Analytics' reusable AI harness. Install it as `py-mai` and import it as
-`mai`. It provides:
+Mittal Analytics' reusable AI harness. Install it as `mittal-ai` and import it as
+`mittal_ai`. It provides:
 
 - streaming, non-streaming and structured LLM responses;
 - tool-call handling and message-history repair;
@@ -14,7 +14,7 @@ The application keeps its API keys. The model declares which provider and base U
 the harness should use:
 
 ```python
-from mai import AIModel, get_client, get_structured_response
+from mittal_ai import AIModel, get_client, get_structured_response
 from pydantic import BaseModel
 
 

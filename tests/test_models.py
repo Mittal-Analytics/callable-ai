@@ -1,4 +1,4 @@
-from mai import AIModel, get_abs_cost, get_client, get_model_options
+from mittal_ai import AIModel, get_abs_cost, get_client, get_model_options
 
 
 def get_model(provider="openrouter", **kwargs) -> AIModel:

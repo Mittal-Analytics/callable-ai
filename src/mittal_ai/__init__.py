@@ -1,6 +1,6 @@
-from mai.costing import get_abs_cost, parse_responses_usage
-from mai.models import AIModel
-from mai.responses import (
+from mittal_ai.costing import get_abs_cost, parse_responses_usage
+from mittal_ai.models import AIModel
+from mittal_ai.responses import (
     AnnotationToolCallURL,
     Messages,
     StreamingResponseChunk,
