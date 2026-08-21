@@ -1,4 +1,12 @@
-from mittal_ai import AIModel, get_abs_cost, get_client, get_model_options
+from openai.types.responses.response_usage import ResponseUsage
+
+from mittal_ai import (
+    AIModel,
+    get_abs_cost,
+    get_client,
+    get_model_options,
+    parse_responses_usage,
+)
 
 
 def get_model(provider="openrouter", **kwargs) -> AIModel:
@@ -72,3 +80,21 @@ def test_cost_uses_model_prices_and_currency_rate():
         )
         == 275
     )
+
+
+def test_responses_usage_handles_missing_token_details():
+    usage = ResponseUsage.model_construct(
+        input_tokens=100,
+        input_tokens_details=None,
+        output_tokens=20,
+        output_tokens_details=None,
+        total_tokens=120,
+    )
+
+    assert parse_responses_usage(usage) == {
+        "prompt_tokens": 100,
+        "prompt_tokens_details": {"cached_tokens": 0},
+        "completion_tokens": 20,
+        "completion_tokens_details": {"reasoning_tokens": 0},
+        "total_tokens": 120,
+    }

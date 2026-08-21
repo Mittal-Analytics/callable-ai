@@ -4,7 +4,7 @@ Mittal Analytics' reusable AI harness. Install it as `mittal-ai` and import it a
 `mittal_ai`. It provides:
 
 - streaming, non-streaming and structured LLM responses;
-- tool-call handling and message-history repair;
+- tool-call handling, reusable tool helpers and message-history repair;
 - token-cost calculation;
 - OpenRouter routing and provider preferences;
 - compatibility fixes for Chinese models; and
@@ -48,14 +48,45 @@ async with get_client(model) as client:
 The main public entry points are `get_response`, `get_streaming_response` and
 `get_structured_response`.
 
+## Tool helpers
+
+Use `format_docstring` to customize a reusable tool description and
+`partial_with_doc` to bind arguments that should not be exposed to the model:
+
+```python
+from mittal_ai import format_docstring, get_streaming_response, partial_with_doc
+
+
+@format_docstring(entity="company")
+def answer_question(_company_id: int, question: str) -> str:
+    """Answer a question about a {entity}.
+
+    Args:
+        - question: Question asked by the user.
+    """
+    return f"{_company_id}: {question}"
+
+
+company_tool = partial_with_doc(answer_question, _company_id=123)
+
+async for event in get_streaming_response(
+    user="user-123",
+    ai_model=model,
+    messages=[{"role": "user", "content": "What changed?"}],
+    tools=[company_tool],
+    reasoning_effort="low",
+):
+    print(event)
+```
+
+`company_tool` preserves the tool metadata while exposing only `question`; the
+bound company ID remains private.
+
 ## Publishing a new version
 
 The [release workflow](.github/workflows/release.yml) publishes version tags to
-PyPI using trusted publishing, so it does not store a PyPI API token. Before
-starting a release, commit all changes that should be included and make sure the
-working tree is clean.
-
-For the next patch release:
+PyPI using trusted publishing. From a clean working tree, publish the next patch
+release with:
 
 ```bash
 uv version --bump patch
@@ -66,16 +97,10 @@ uv run pre-commit run --all-files
 
 git add pyproject.toml uv.lock
 git commit -m "Release version $version"
-git push origin main
-
 git tag -a "v$version" -m "v$version"
-git push origin "v$version"
+git push origin main "v$version"
 ```
 
-Pushing the tag starts the workflow. It runs the tests, builds and installs the
-wheel and source distribution, generates attestations, and publishes the files
-to PyPI.
-
-Use `uv version --bump minor` or `uv version --bump major` when appropriate. The
-tag must match the version in `pyproject.toml`, with a `v` prefix. PyPI release
-versions are immutable, so every release needs a new version.
+The tag must match the version in `pyproject.toml`, with a `v` prefix. Use
+`--bump minor` or `--bump major` when appropriate. PyPI versions are immutable,
+so every release needs a new version.

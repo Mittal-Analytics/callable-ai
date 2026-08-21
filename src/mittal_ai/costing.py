@@ -11,11 +11,17 @@ def parse_responses_usage(responses_usage: ResponseUsage) -> OpenRouterCompletio
     openrouter_usage: OpenRouterCompletionUsage = {
         "prompt_tokens": responses_usage.input_tokens,
         "prompt_tokens_details": {
-            "cached_tokens": responses_usage.input_tokens_details.cached_tokens
+            "cached_tokens": getattr(
+                responses_usage.input_tokens_details, "cached_tokens", 0
+            )
+            or 0
         },
         "completion_tokens": responses_usage.output_tokens,
         "completion_tokens_details": {
-            "reasoning_tokens": responses_usage.output_tokens_details.reasoning_tokens
+            "reasoning_tokens": getattr(
+                responses_usage.output_tokens_details, "reasoning_tokens", 0
+            )
+            or 0
         },
         "total_tokens": responses_usage.total_tokens,
     }

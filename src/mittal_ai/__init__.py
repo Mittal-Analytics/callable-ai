@@ -14,6 +14,7 @@ from mittal_ai.responses import (
     get_structured_response,
     repair_message_history,
 )
+from mittal_ai.tools import format_docstring, partial_with_doc
 
 __all__ = [
     "AIModel",
@@ -22,6 +23,7 @@ __all__ = [
     "StreamingResponseChunk",
     "ToolCallResult",
     "UsageDetails",
+    "format_docstring",
     "gen_error",
     "get_abs_cost",
     "get_client",
@@ -30,5 +32,6 @@ __all__ = [
     "get_streaming_response",
     "get_structured_response",
     "parse_responses_usage",
+    "partial_with_doc",
     "repair_message_history",
 ]
