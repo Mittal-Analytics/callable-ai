@@ -1,13 +1,13 @@
 [project]
 name = "mittal-ai"
-version = "0.1.1"
+version = "0.1.2"
 description = "Mittal Analytics AI harness"
 readme = "README.md"
 authors = [{ name = "Mittal Analytics Pvt Ltd" }]
 requires-python = ">=3.12"
 dependencies = [
     "dj-evals>=0.6,<0.7",
-    "django>=5.2,<6.2",
+    "django>=5.1",
     "openai>=2.38,<3",
     "pydantic>=2.12,<3",
 ]

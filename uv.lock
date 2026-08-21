@@ -247,7 +247,7 @@ wheels = [
 
 [[package]]
 name = "mittal-ai"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "." }
 dependencies = [
     { name = "dj-evals" },
@@ -266,7 +266,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "dj-evals", specifier = ">=0.6,<0.7" },
-    { name = "django", specifier = ">=5.2,<6.2" },
+    { name = "django", specifier = ">=5.1" },
     { name = "openai", specifier = ">=2.38,<3" },
     { name = "pydantic", specifier = ">=2.12,<3" },
 ]
