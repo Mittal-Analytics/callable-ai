@@ -156,9 +156,8 @@ def get_model_options(model: AIModel, reasoning_effort: Optional[str]) -> Dict:
 
 
 def _parse_docs(docs):
-    # the __doc__ "strip a uniform amount of indentation from the second and further lines of the docstring, equal to the minimum indentation of all non-blank lines after the first line."
-    # hence we are splitting at `\nArgs:\n`
-    function_description, args_description = docs.strip().split("\nArgs:\n")
+    docs = inspect.cleandoc(docs)
+    function_description, args_description = docs.split("\nArgs:\n", maxsplit=1)
     function_description = function_description.strip()
 
     args_lines = args_description.split("\n    - ")
