@@ -12,6 +12,10 @@ dependencies = [
     "pydantic>=2.12,<3",
 ]
 
+[project.urls]
+Source = "https://github.com/Mittal-Analytics/mittal-ai"
+Issues = "https://github.com/Mittal-Analytics/mittal-ai/issues"
+
 [build-system]
 requires = ["uv_build>=0.9.26,<0.13.0"]
 build-backend = "uv_build"
