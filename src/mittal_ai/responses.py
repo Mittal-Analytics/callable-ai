@@ -23,8 +23,6 @@ from typing import (
     cast,
 )
 
-from dj_evals import EvalEvent
-from django.core.exceptions import ObjectDoesNotExist
 from openai import AsyncOpenAI, AsyncStream, BadRequestError, Omit, omit
 from openai.types.chat import (
     ChatCompletionAssistantMessageParam,
@@ -64,6 +62,11 @@ logger = logging.getLogger(__name__)
 
 
 # Types
+class EvalEvent(TypedDict):
+    type: Literal["dj_evals.event"]
+    message: str
+
+
 class UsageDetails(TypedDict):
     id: str
     model: str
@@ -341,23 +344,12 @@ def _gather_tool_call_chunks(
 async def _call_tool_calls(
     tool_calls: List[Tuple[Callable, Any]], *, spend, max_spend
 ) -> List[ToolCallResult | BaseException]:
-    tasks = []
-    for function, kwargs in tool_calls:
-        if spend >= max_spend:
-            tasks.append(
-                gen_error(
-                    f"The amount spent on this answer has exceeded the maximum limit of ₹{max_spend}. The system didn't execute this tool call. Ask the user if they are okay to spend more. You can then call this tool call again if the user approves."
-                )
-            )
-        else:
-            try:
-                tasks.append(function(**kwargs))
-            except TypeError as e:
-                tasks.append(gen_error(f"error: {e.args[0]}"))
-            except ObjectDoesNotExist:
-                tasks.append(gen_error("error: document not found"))
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    return results
+    async for result in _call_tool_calls_with_events(
+        tool_calls, spend=spend, max_spend=max_spend
+    ):
+        if isinstance(result, list):
+            return result
+    raise RuntimeError("Tool calls did not return results")
 
 
 async def _run_tool_call_with_events(
@@ -377,15 +369,11 @@ async def _run_tool_call_with_events(
         return
 
     try:
-        result = function(**kwargs)
-    except TypeError as e:
-        result = await gen_error(f"error: {e.args[0]}")
-    except ObjectDoesNotExist:
-        result = await gen_error("error: document not found")
-    except Exception as e:
-        result = e
-    else:
         try:
+            result = function(**kwargs)
+        except TypeError as error:
+            result = await gen_error(f"error: {error.args[0]}")
+        else:
             if inspect.isasyncgen(result):
                 tool_result = None
                 async for event in result:
@@ -402,17 +390,21 @@ async def _run_tool_call_with_events(
                 result = tool_result
             elif inspect.isawaitable(result):
                 result = await result
-        except ObjectDoesNotExist:
-            result = await gen_error("error: document not found")
-        except Exception as e:
-            result = e
+    except Exception as error:
+        arguments = {**(getattr(function, "keywords", None) or {}), **kwargs}
+        logger.exception(
+            "Tool call failed: tool=%s arguments=%r",
+            function.__name__,  # type: ignore
+            arguments,
+        )
+        result = error
 
     await queue.put(("result", index, result))
 
 
 async def _call_tool_calls_with_events(
     tool_calls: List[Tuple[Callable, Any]], *, spend, max_spend
-) -> AsyncIterator[EvalEvent | List[ToolCallResult | BaseException]]:
+) -> AsyncGenerator[EvalEvent | List[ToolCallResult | BaseException], None]:
     queue = asyncio.Queue()
     tasks = []
     for index, (function, kwargs) in enumerate(tool_calls):
@@ -435,19 +427,25 @@ async def _call_tool_calls_with_events(
 
     results: dict[int, ToolCallResult | BaseException] = {}
     completed_tasks = 0
-    while completed_tasks < len(tasks):
-        # queue.get() sleeps until a tool emits an event or finishes; this is not
-        # a CPU-spinning loop.
-        event = await queue.get()
-        if event[0] == "event":
-            yield event[1]
-        elif event[0] == "result":
-            _type, index, result = event
-            results[index] = result
-        elif event[0] == "done":
-            completed_tasks += 1
+    try:
+        while completed_tasks < len(tasks):
+            # queue.get() sleeps until a tool emits an event or finishes; this is not
+            # a CPU-spinning loop.
+            event = await queue.get()
+            if event[0] == "event":
+                yield event[1]
+            elif event[0] == "result":
+                _type, index, result = event
+                results[index] = result
+            elif event[0] == "done":
+                completed_tasks += 1
 
-    yield [results[index] for index in range(len(tool_calls))]
+        yield [results[index] for index in range(len(tool_calls))]
+    finally:
+        # Stop tool calls from continuing after the caller closes this generator.
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _append_interrupted_tool_outputs(
@@ -560,15 +558,11 @@ async def _process_tool_calls(
         for function, kwargs in tool_calls:
             yield (function.__name__, kwargs)  # type: ignore
 
-        # yield tool calls and create coroutine tasks
         results = await _call_tool_calls(tool_calls, spend=spend, max_spend=max_spend)
 
         # Add results to messages
         for tool_call_id, result in zip(tool_call_ids, results):
             if isinstance(result, BaseException):
-                logger.exception(
-                    "Error occurred during tool call execution", exc_info=result
-                )
                 content = repr(result)
                 yield (gen_error.__name__, {"msg": content})
                 annotations = []

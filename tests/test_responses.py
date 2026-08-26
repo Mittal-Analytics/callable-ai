@@ -1,9 +1,12 @@
+import asyncio
 from contextlib import aclosing
 
+import pytest
 from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import Choice, ChoiceDelta
 
 from mittal_ai import AIModel, get_streaming_response
+from mittal_ai.responses import _call_tool_calls_with_events
 
 
 class MockStream:
@@ -72,3 +75,27 @@ async def test_closing_stream_stops_response_and_closes_client(monkeypatch):
 
     assert stream.closed
     assert client.closed
+
+
+async def test_closing_tool_calls_cancels_pending_tools():
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def wait_forever():
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    tool_calls = _call_tool_calls_with_events(
+        [(wait_forever, {})], spend=0, max_spend=100
+    )
+    consumer = asyncio.create_task(anext(tool_calls))
+    await started.wait()
+
+    consumer.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await consumer
+
+    assert cancelled.is_set()
