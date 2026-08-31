@@ -1,6 +1,6 @@
 [project]
 name = "mittal-ai"
-version = "0.1.3"
+version = "0.1.4"
 description = "Mittal Analytics AI harness"
 readme = "README.md"
 authors = [{ name = "Mittal Analytics Pvt Ltd" }]
