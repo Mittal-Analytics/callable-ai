@@ -369,30 +369,23 @@ async def _run_tool_call_with_events(
         return
 
     try:
-        try:
-            result = function(**kwargs)
-        except TypeError as error:
-            result = await gen_error(f"error: {error.args[0]}")
-        else:
-            if inspect.isasyncgen(result):
-                tool_result = None
-                async for event in result:
-                    if (
-                        isinstance(event, dict)
-                        and event.get("type") == "dj_evals.event"
-                    ):
-                        await queue.put(("event", event))
-                    else:
-                        tool_result = event
-                if tool_result is None:
-                    # Eval events are only for UI; the model still needs a tool result.
-                    raise ValueError("Tool generator did not yield a result")
-                result = tool_result
-            elif inspect.isawaitable(result):
-                result = await result
+        result = function(**kwargs)
+        if inspect.isasyncgen(result):
+            tool_result = None
+            async for event in result:
+                if isinstance(event, dict) and event.get("type") == "dj_evals.event":
+                    await queue.put(("event", event))
+                else:
+                    tool_result = event
+            if tool_result is None:
+                # Eval events are only for UI; the model still needs a tool result.
+                raise ValueError("Tool generator did not yield a result")
+            result = tool_result
+        elif inspect.isawaitable(result):
+            result = await result
     except Exception as error:
         arguments = {**(getattr(function, "keywords", None) or {}), **kwargs}
-        logger.exception(
+        logger.warning(
             "Tool call failed: tool=%s arguments=%r",
             function.__name__,  # type: ignore
             arguments,
