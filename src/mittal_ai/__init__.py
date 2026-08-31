@@ -2,9 +2,11 @@ from mittal_ai.costing import get_abs_cost, parse_responses_usage
 from mittal_ai.models import AIModel
 from mittal_ai.responses import (
     AnnotationToolCallURL,
+    EvalEvent,
     Messages,
     StreamingResponseChunk,
     ToolCallResult,
+    ToolFunction,
     UsageDetails,
     gen_error,
     get_client,
@@ -19,9 +21,11 @@ from mittal_ai.tools import format_docstring, partial_with_doc
 __all__ = [
     "AIModel",
     "AnnotationToolCallURL",
+    "EvalEvent",
     "Messages",
     "StreamingResponseChunk",
     "ToolCallResult",
+    "ToolFunction",
     "UsageDetails",
     "format_docstring",
     "gen_error",

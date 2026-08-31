@@ -3,13 +3,14 @@ import inspect
 import json
 import logging
 from collections import defaultdict
+from collections.abc import AsyncIterator
 from contextlib import aclosing
 from enum import Enum
 from itertools import groupby
 from typing import (
     Any,
     AsyncGenerator,
-    AsyncIterator,
+    Awaitable,
     Callable,
     Dict,
     List,
@@ -23,8 +24,6 @@ from typing import (
     cast,
 )
 
-from dj_evals import EvalEvent
-from django.core.exceptions import ObjectDoesNotExist
 from openai import AsyncOpenAI, AsyncStream, BadRequestError, Omit, omit
 from openai.types.chat import (
     ChatCompletionAssistantMessageParam,
@@ -33,7 +32,10 @@ from openai.types.chat import (
     ChatCompletionMessageParam,
     ChatCompletionMessageToolCallUnionParam,
 )
-from openai.types.chat.chat_completion_chunk import ChoiceDeltaToolCall
+from openai.types.chat.chat_completion_chunk import (
+    ChoiceDeltaToolCall,
+    ChoiceDeltaToolCallFunction,
+)
 from openai.types.chat.chat_completion_tool_param import FunctionDefinition
 from openai.types.completion_usage import CompletionUsage
 from openai.types.responses import (
@@ -64,6 +66,13 @@ logger = logging.getLogger(__name__)
 
 
 # Types
+# Function calls can yield these messages so dj-evals renders progress from
+# long-running tools or sub-agents.
+class EvalEvent(TypedDict):
+    type: Literal["dj_evals.event"]
+    message: str
+
+
 class UsageDetails(TypedDict):
     id: str
     model: str
@@ -72,13 +81,13 @@ class UsageDetails(TypedDict):
     number_of_web_searches: NotRequired[int]
 
 
-ParsedToolCallInfo: TypeAlias = Tuple[str, Dict[str, Any]]
 StreamingResponseChunk: TypeAlias = (
     str
     | UsageDetails
     | ReasoningDetailSummaryType
     | ReasoningDetailTextType
-    | ParsedToolCallInfo
+    | ResponseFunctionToolCall
+    | EvalEvent
 )
 
 Messages: TypeAlias = List[ChatCompletionMessageParam]
@@ -102,6 +111,23 @@ class ToolCallResult(TypedDict):
     usage_details: NotRequired[UsageDetails]
     annotations: NotRequired[List[AnnotationURLCitation | AnnotationToolCallURL]]
     content: str
+
+
+# Tools return one result directly or asynchronously, or stream progress first.
+ToolFunctionResult: TypeAlias = (
+    ToolCallResult
+    | Awaitable[ToolCallResult]
+    | AsyncIterator[EvalEvent | ToolCallResult]
+)
+ToolFunction: TypeAlias = Callable[..., ToolFunctionResult]
+ToolCall: TypeAlias = Tuple[ToolFunction, Dict[str, Any]]
+
+
+ToolCallQueueEvent: TypeAlias = (
+    Tuple[Literal["event"], EvalEvent]
+    | Tuple[Literal["result"], int, ToolCallResult | BaseException]
+    | Tuple[Literal["done"]]
+)
 
 
 # Keeps the parsed response type tied to the Pydantic schema passed in.
@@ -170,7 +196,7 @@ def _parse_docs(docs):
     return {"function_docs": function_description, "arguments": arguments}
 
 
-def _get_tools_definition(function: Callable) -> ChatCompletionFunctionToolParam:
+def _get_tools_definition(function: ToolFunction) -> ChatCompletionFunctionToolParam:
     sig = inspect.signature(function)
     description = _parse_docs(function.__doc__)
     parameters = {
@@ -234,7 +260,7 @@ def _get_tools_definition(function: Callable) -> ChatCompletionFunctionToolParam
     return tool_definition
 
 
-def _get_response_tools_definition(tool: Callable) -> FunctionToolParam:
+def _get_response_tools_definition(tool: ToolFunction) -> FunctionToolParam:
     tool_def = _get_tools_definition(tool)
     return FunctionToolParam(
         type="function",
@@ -251,9 +277,9 @@ async def gen_error(msg) -> ToolCallResult:
 
 
 def _parse_tool_call(
-    tools: Optional[List[Callable]],
+    tools: Optional[List[ToolFunction]],
     tool_call: ChatCompletionMessageFunctionToolCallParam,
-) -> Tuple[Callable, Any]:
+) -> ToolCall:
     available = {tool.__name__: tool for tool in tools} if tools else {}  # type: ignore
     name = tool_call["function"]["name"]
     if name not in available:
@@ -262,7 +288,9 @@ def _parse_tool_call(
     else:
         function = available[name]
         try:
-            kwargs = json.loads(tool_call["function"]["arguments"])
+            kwargs = cast(
+                Dict[str, Any], json.loads(tool_call["function"]["arguments"])
+            )
         except json.JSONDecodeError:
             function = gen_error
             kwargs = {"msg": "Couldn't parse the arguments to the tool"}
@@ -338,37 +366,16 @@ def _gather_tool_call_chunks(
     return list(final_tool_calls.values())
 
 
-async def _call_tool_calls(
-    tool_calls: List[Tuple[Callable, Any]], *, spend, max_spend
-) -> List[ToolCallResult | BaseException]:
-    tasks = []
-    for function, kwargs in tool_calls:
-        if spend >= max_spend:
-            tasks.append(
-                gen_error(
-                    f"The amount spent on this answer has exceeded the maximum limit of ₹{max_spend}. The system didn't execute this tool call. Ask the user if they are okay to spend more. You can then call this tool call again if the user approves."
-                )
-            )
-        else:
-            try:
-                tasks.append(function(**kwargs))
-            except TypeError as e:
-                tasks.append(gen_error(f"error: {e.args[0]}"))
-            except ObjectDoesNotExist:
-                tasks.append(gen_error("error: document not found"))
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    return results
-
-
 async def _run_tool_call_with_events(
     index: int,
-    function: Callable,
-    kwargs: Any,
-    queue: asyncio.Queue,
+    function: ToolFunction,
+    kwargs: Dict[str, Any],
+    queue: asyncio.Queue[ToolCallQueueEvent],
     *,
-    spend,
-    max_spend,
-):
+    spend: float,
+    max_spend: float,
+) -> None:
+    """Run one tool and place its progress and final result on the queue."""
     if spend >= max_spend:
         result = await gen_error(
             f"The amount spent on this answer has exceeded the maximum limit of ₹{max_spend}. The system didn't execute this tool call. Ask the user if they are okay to spend more. You can then call this tool call again if the user approves."
@@ -377,43 +384,42 @@ async def _run_tool_call_with_events(
         return
 
     try:
-        result = function(**kwargs)
-    except TypeError as e:
-        result = await gen_error(f"error: {e.args[0]}")
-    except ObjectDoesNotExist:
-        result = await gen_error("error: document not found")
-    except Exception as e:
-        result = e
-    else:
-        try:
-            if inspect.isasyncgen(result):
-                tool_result = None
-                async for event in result:
-                    if (
-                        isinstance(event, dict)
-                        and event.get("type") == "dj_evals.event"
-                    ):
-                        await queue.put(("event", event))
+        function_result = function(**kwargs)
+        if isinstance(function_result, AsyncIterator):
+            tool_result = None
+            try:
+                async for event in function_result:
+                    if event.get("type") == "dj_evals.event":
+                        await queue.put(("event", cast(EvalEvent, event)))
                     else:
-                        tool_result = event
-                if tool_result is None:
-                    # Eval events are only for UI; the model still needs a tool result.
-                    raise ValueError("Tool generator did not yield a result")
-                result = tool_result
-            elif inspect.isawaitable(result):
-                result = await result
-        except ObjectDoesNotExist:
-            result = await gen_error("error: document not found")
-        except Exception as e:
-            result = e
+                        tool_result = cast(ToolCallResult, event)
+            finally:
+                # Custom async iterators do not have to support explicit closing.
+                if close := getattr(function_result, "aclose", None):
+                    await close()
+            if tool_result is None:
+                # Progress events do not provide the model with a tool result.
+                raise ValueError("Tool generator did not yield a result")
+            result = tool_result
+        elif inspect.isawaitable(function_result):
+            result = await cast(Awaitable[ToolCallResult], function_result)
+        else:
+            result = cast(ToolCallResult, function_result)
+    except Exception as error:
+        logger.warning(
+            "Tool call failed: tool=%s arguments=%r",
+            function.__name__,  # type: ignore
+            kwargs,
+        )
+        result = error
 
     await queue.put(("result", index, result))
 
 
 async def _call_tool_calls_with_events(
-    tool_calls: List[Tuple[Callable, Any]], *, spend, max_spend
-) -> AsyncIterator[EvalEvent | List[ToolCallResult | BaseException]]:
-    queue = asyncio.Queue()
+    tool_calls: List[ToolCall], *, spend: float, max_spend: float
+) -> AsyncGenerator[EvalEvent | List[ToolCallResult | BaseException], None]:
+    queue: asyncio.Queue[ToolCallQueueEvent] = asyncio.Queue()
     tasks = []
     for index, (function, kwargs) in enumerate(tool_calls):
         # create_task schedules the coroutine immediately; it starts running when
@@ -435,19 +441,26 @@ async def _call_tool_calls_with_events(
 
     results: dict[int, ToolCallResult | BaseException] = {}
     completed_tasks = 0
-    while completed_tasks < len(tasks):
-        # queue.get() sleeps until a tool emits an event or finishes; this is not
-        # a CPU-spinning loop.
-        event = await queue.get()
-        if event[0] == "event":
-            yield event[1]
-        elif event[0] == "result":
-            _type, index, result = event
-            results[index] = result
-        elif event[0] == "done":
-            completed_tasks += 1
+    try:
+        while completed_tasks < len(tasks):
+            # queue.get() sleeps until a tool emits an event or finishes; this is not
+            # a CPU-spinning loop.
+            event = await queue.get()
+            if event[0] == "event":
+                yield event[1]
+            elif event[0] == "result":
+                _type, index, result = event
+                results[index] = result
+            elif event[0] == "done":
+                completed_tasks += 1
 
-    yield [results[index] for index in range(len(tool_calls))]
+        yield [results[index] for index in range(len(tool_calls))]
+    finally:
+        # A stopped response closes this generator, but create_task jobs keep running.
+        # Cancel long-running tools and wait for their cleanup to finish.
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _append_interrupted_tool_outputs(
@@ -539,38 +552,55 @@ def repair_message_history(messages: Messages) -> bool:
 async def _process_tool_calls(
     *,
     messages: Messages,
-    tools: List[Callable],
+    tools: List[ToolFunction],
     pending_tool_calls: List[ChoiceDeltaToolCall],
     spend: float,
     max_spend: float,
-) -> AsyncGenerator[UsageDetails | ParsedToolCallInfo, None]:
+) -> AsyncGenerator[UsageDetails | ResponseFunctionToolCall | EvalEvent, None]:
+    """Execute tool calls and append their results to the message history."""
     # None is the type accepted by asend(); yielded values use the first parameter.
     # handle function calls concurrently
     # https://platform.openai.com/docs/guides/function-calling?api-mode=chat#handling-function-calls
 
     tool_calls = []
-    tool_call_ids = []
+    # Collect every ID before yielding so cancellation can repair all pending calls.
+    tool_call_ids = [cast(str, tool_call.id) for tool_call in pending_tool_calls]
     completed_tool_call_ids = set()
-    for tool_call in pending_tool_calls:
-        function, kwargs = _parse_tool_call(tools, tool_call.to_dict())  # type: ignore
-        tool_calls.append((function, kwargs))
-        tool_call_ids.append(cast(str, tool_call.id))
 
     try:
-        for function, kwargs in tool_calls:
-            yield (function.__name__, kwargs)  # type: ignore
+        for tool_call in pending_tool_calls:
+            function, kwargs = _parse_tool_call(tools, tool_call.to_dict())  # type: ignore
+            tool_calls.append((function, kwargs))
 
-        # yield tool calls and create coroutine tasks
-        results = await _call_tool_calls(tool_calls, spend=spend, max_spend=max_spend)
+            parsed_call = cast(ChoiceDeltaToolCallFunction, tool_call.function)
+            yield ResponseFunctionToolCall(
+                arguments=parsed_call.arguments or "",
+                call_id=cast(str, tool_call.id),
+                name=parsed_call.name or "",
+                type="function_call",
+            )
+
+        results: List[ToolCallResult | BaseException] = []
+        async with aclosing(
+            _call_tool_calls_with_events(tool_calls, spend=spend, max_spend=max_spend)
+        ) as tool_events:
+            async for event in tool_events:
+                if isinstance(event, list):
+                    results = event
+                else:
+                    yield event
 
         # Add results to messages
         for tool_call_id, result in zip(tool_call_ids, results):
             if isinstance(result, BaseException):
-                logger.exception(
-                    "Error occurred during tool call execution", exc_info=result
-                )
                 content = repr(result)
-                yield (gen_error.__name__, {"msg": content})
+                # Emit a synthetic error call so the UI can show this tool call failed.
+                yield ResponseFunctionToolCall(
+                    arguments=json.dumps({"msg": "Unable to process this tool call."}),
+                    call_id=tool_call_id,
+                    name=gen_error.__name__,
+                    type="function_call",
+                )
                 annotations = []
             else:
                 if result.get("usage_details"):
@@ -602,7 +632,7 @@ async def get_streaming_response(
     user: str,
     ai_model: AIModel,
     messages: Messages,
-    tools: List[Callable],
+    tools: List[ToolFunction],
     reasoning_effort: Optional[str],
     spend: float = 0,
     max_spend: float = 100,
@@ -725,9 +755,9 @@ async def get_streaming_response(
 
 
 def _parse_responses_tool_call(
-    tools: Optional[List[Callable]],
+    tools: Optional[List[ToolFunction]],
     tool_call: ResponseFunctionToolCall,
-):
+) -> ToolCall:
     available = {tool.__name__: tool for tool in tools} if tools else {}  # type: ignore
     name = tool_call.name
     if name not in available:
@@ -736,12 +766,25 @@ def _parse_responses_tool_call(
     else:
         function = available[name]
         try:
-            kwargs = json.loads(tool_call.arguments)
+            kwargs = cast(Dict[str, Any], json.loads(tool_call.arguments))
         except json.JSONDecodeError:
             function = gen_error
             kwargs = {"msg": "Couldn't parse the arguments to the tool"}
 
     return function, kwargs
+
+
+def _append_interrupted_response_tool_outputs(
+    input_list: ResponseInputParam, tool_call_ids: List[str]
+) -> None:
+    for tool_call_id in tool_call_ids:
+        input_list.append(
+            {
+                "type": "function_call_output",
+                "call_id": tool_call_id,
+                "output": INTERRUPTED_TOOL_OUTPUT,
+            }
+        )
 
 
 def _handle_tool_call_results(
@@ -773,13 +816,13 @@ async def get_response(
     *,
     ai_model: AIModel,
     input: ResponseInputParam,
-    tools: List[Callable],
+    tools: List[ToolFunction],
     client: AsyncOpenAI,
     reasoning_effort: Optional[str],
     prompt_cache_key: str | Omit = omit,
     spend: float = 0,
     max_spend: float = 100,
-) -> AsyncIterator[EvalEvent | Tuple[Response, float]]:
+) -> AsyncGenerator[EvalEvent | Tuple[Response, float], None]:
     response = await client.responses.create(
         model=ai_model.name,
         tools=[_get_response_tools_definition(tool) for tool in tools],
@@ -798,45 +841,56 @@ async def get_response(
         else 0
     )
 
-    # prepare tool calls
-    tool_calls = []
-    tool_call_ids = []
-    for item in response.output:
-        if isinstance(item, ResponseFunctionToolCall):
-            logger.debug("tool call %s with %s", item.name, item.arguments)
-            yield EvalEvent(
-                type="dj_evals.event",
-                message=f"Tool call: {item.name}\n\n```json\n{item.arguments}\n```",
-            )
-            function, kwargs = _parse_responses_tool_call(tools, item)
-            tool_calls.append((function, kwargs))
-            tool_call_ids.append(item.call_id)
+    response_tool_calls = [
+        item for item in response.output if isinstance(item, ResponseFunctionToolCall)
+    ]
+    tool_calls = [
+        _parse_responses_tool_call(tools, item) for item in response_tool_calls
+    ]
+    tool_call_ids = [item.call_id for item in response_tool_calls]
 
     if tool_calls:
-        results = []
-        async for event in _call_tool_calls_with_events(
-            tool_calls, spend=spend, max_spend=max_spend
-        ):
-            if isinstance(event, list):
-                results = event
-            else:
-                yield event
+        try:
+            for item in response_tool_calls:
+                yield EvalEvent(
+                    type="dj_evals.event",
+                    message=f"Tool call: {item.name}\n\n```json\n{item.arguments}\n```",
+                )
+
+            results: List[ToolCallResult | BaseException] = []
+            async with aclosing(
+                _call_tool_calls_with_events(
+                    tool_calls, spend=spend, max_spend=max_spend
+                )
+            ) as tool_events:
+                async for event in tool_events:
+                    if isinstance(event, list):
+                        results = event
+                    else:
+                        yield event
+        except (asyncio.CancelledError, GeneratorExit):
+            # The caller may reuse this input after stopping the response.
+            _append_interrupted_response_tool_outputs(input, tool_call_ids)
+            raise
 
         spend += _handle_tool_call_results(
             input, tool_call_ids=tool_call_ids, tool_call_results=results
         )
 
-        async for event in get_response(
-            ai_model=ai_model,
-            input=input,
-            tools=tools,
-            spend=spend,
-            max_spend=max_spend,
-            client=client,
-            reasoning_effort=reasoning_effort,
-            prompt_cache_key=prompt_cache_key,
-        ):
-            yield event
+        async with aclosing(
+            get_response(
+                ai_model=ai_model,
+                input=input,
+                tools=tools,
+                spend=spend,
+                max_spend=max_spend,
+                client=client,
+                reasoning_effort=reasoning_effort,
+                prompt_cache_key=prompt_cache_key,
+            )
+        ) as next_response:
+            async for event in next_response:
+                yield event
     else:
         logger.debug("total spent using %s = %s", ai_model.name, spend)
         yield response, spend
@@ -846,93 +900,110 @@ async def _get_structured_text_response(
     *,
     ai_model: AIModel,
     input: ResponseInputParam,
-    tools: List[Callable],
+    tools: List[ToolFunction],
     text_format: type[PydanticModel],
     client: AsyncOpenAI,
     reasoning_effort: Optional[str],
     prompt_cache_key: str | Omit,
     spend: float,
     max_spend: float,
-) -> AsyncIterator[EvalEvent | Tuple[ParsedResponse[PydanticModel], float]]:
+) -> AsyncGenerator[
+    EvalEvent | Tuple[ParsedResponse[PydanticModel], float],
+    None,
+]:
     compatibility.add_json_schema_to_input(input, text_format)
 
-    async for event in get_response(
-        ai_model=ai_model,
-        input=input,
-        tools=tools,
-        spend=spend,
-        max_spend=max_spend,
-        client=client,
-        reasoning_effort=reasoning_effort,
-        prompt_cache_key=prompt_cache_key,
-    ):
-        if not isinstance(event, tuple):
-            yield event
-            continue
+    async with aclosing(
+        get_response(
+            ai_model=ai_model,
+            input=input,
+            tools=tools,
+            spend=spend,
+            max_spend=max_spend,
+            client=client,
+            reasoning_effort=reasoning_effort,
+            prompt_cache_key=prompt_cache_key,
+        )
+    ) as response_events:
+        async for event in response_events:
+            if not isinstance(event, tuple):
+                yield event
+                continue
 
-        response, spend = event
-        try:
-            yield compatibility.parse_response_text(response, text_format), spend
-        except ValidationError as error:
-            logger.warning(
-                "Could not parse structured response from %s: %s. "
-                "Retrying for JSON response.",
-                ai_model.name,
-                error,
-            )
-            input.append(
-                {
-                    "role": "user",
-                    "content": "Please provide the metrics in the requested JSON format only, without any additional explanation.",
-                }
-            )
+            response, spend = event
+            try:
+                yield compatibility.parse_response_text(response, text_format), spend
+            except ValidationError as error:
+                logger.warning(
+                    "Could not parse structured response from %s: %s. "
+                    "Retrying for JSON response.",
+                    ai_model.name,
+                    error,
+                )
+                input.append(
+                    {
+                        "role": "user",
+                        "content": "Please provide the metrics in the requested JSON format only, without any additional explanation.",
+                    }
+                )
 
-            async for retry_event in get_response(
-                ai_model=ai_model,
-                input=input,
-                tools=tools,
-                spend=spend,
-                max_spend=max_spend,
-                client=client,
-                reasoning_effort=reasoning_effort,
-                prompt_cache_key=prompt_cache_key,
-            ):
-                if not isinstance(retry_event, tuple):
-                    yield retry_event
-                else:
-                    response, spend = retry_event
-                    yield (
-                        compatibility.parse_response_text(response, text_format),
-                        spend,
+                async with aclosing(
+                    get_response(
+                        ai_model=ai_model,
+                        input=input,
+                        tools=tools,
+                        spend=spend,
+                        max_spend=max_spend,
+                        client=client,
+                        reasoning_effort=reasoning_effort,
+                        prompt_cache_key=prompt_cache_key,
                     )
-        return
+                ) as retry_events:
+                    async for retry_event in retry_events:
+                        if not isinstance(retry_event, tuple):
+                            yield retry_event
+                        else:
+                            response, spend = retry_event
+                            yield (
+                                compatibility.parse_response_text(
+                                    response, text_format
+                                ),
+                                spend,
+                            )
+            return
 
 
 async def get_structured_response(
     *,
     ai_model: AIModel,
     input: ResponseInputParam,
-    tools: List[Callable],
+    tools: List[ToolFunction],
     text_format: type[PydanticModel],
     client: AsyncOpenAI,
     reasoning_effort: Optional[str],
     prompt_cache_key: str | Omit = omit,
     spend: float = 0,
     max_spend: float = 100,
-) -> AsyncIterator[EvalEvent | Tuple[ParsedResponse[PydanticModel], float]]:
+) -> AsyncGenerator[
+    EvalEvent | Tuple[ParsedResponse[PydanticModel], float],
+    None,
+]:
     if not compatibility.supports_structured_output_with_tools(ai_model):
-        async for event in _get_structured_text_response(
-            ai_model=ai_model,
-            input=input,
-            tools=tools,
-            text_format=text_format,
-            spend=spend,
-            max_spend=max_spend,
-            client=client,
-            reasoning_effort=reasoning_effort,
-            prompt_cache_key=prompt_cache_key,
-        ):
-            yield event
+        async with aclosing(
+            _get_structured_text_response(
+                ai_model=ai_model,
+                input=input,
+                tools=tools,
+                text_format=text_format,
+                spend=spend,
+                max_spend=max_spend,
+                client=client,
+                reasoning_effort=reasoning_effort,
+                prompt_cache_key=prompt_cache_key,
+            )
+        ) as text_response:
+            async for event in text_response:
+                yield event
         return
 
     response = await client.responses.parse(
@@ -954,46 +1025,57 @@ async def get_structured_response(
         else 0
     )
 
-    # prepare tool calls
-    tool_calls = []
-    tool_call_ids = []
-    for item in response.output:
-        if isinstance(item, ResponseFunctionToolCall):
-            logger.debug("tool call %s with %s", item.name, item.arguments)
-            yield EvalEvent(
-                type="dj_evals.event",
-                message=f"Tool call: {item.name}\n\n```json\n{item.arguments}\n```",
-            )
-            function, kwargs = _parse_responses_tool_call(tools, item)
-            tool_calls.append((function, kwargs))
-            tool_call_ids.append(item.call_id)
+    response_tool_calls = [
+        item for item in response.output if isinstance(item, ResponseFunctionToolCall)
+    ]
+    tool_calls = [
+        _parse_responses_tool_call(tools, item) for item in response_tool_calls
+    ]
+    tool_call_ids = [item.call_id for item in response_tool_calls]
 
     if tool_calls:
-        results = []
-        async for event in _call_tool_calls_with_events(
-            tool_calls, spend=spend, max_spend=max_spend
-        ):
-            if isinstance(event, list):
-                results = event
-            else:
-                yield event
+        try:
+            for item in response_tool_calls:
+                yield EvalEvent(
+                    type="dj_evals.event",
+                    message=f"Tool call: {item.name}\n\n```json\n{item.arguments}\n```",
+                )
+
+            results: List[ToolCallResult | BaseException] = []
+            async with aclosing(
+                _call_tool_calls_with_events(
+                    tool_calls, spend=spend, max_spend=max_spend
+                )
+            ) as tool_events:
+                async for event in tool_events:
+                    if isinstance(event, list):
+                        results = event
+                    else:
+                        yield event
+        except (asyncio.CancelledError, GeneratorExit):
+            # The caller may reuse this input after stopping the response.
+            _append_interrupted_response_tool_outputs(input, tool_call_ids)
+            raise
 
         spend += _handle_tool_call_results(
             input, tool_call_ids=tool_call_ids, tool_call_results=results
         )
 
-        async for event in get_structured_response(
-            ai_model=ai_model,
-            input=input,
-            tools=tools,
-            spend=spend,
-            max_spend=max_spend,
-            client=client,
-            reasoning_effort=reasoning_effort,
-            text_format=text_format,
-            prompt_cache_key=prompt_cache_key,
-        ):
-            yield event
+        async with aclosing(
+            get_structured_response(
+                ai_model=ai_model,
+                input=input,
+                tools=tools,
+                spend=spend,
+                max_spend=max_spend,
+                client=client,
+                reasoning_effort=reasoning_effort,
+                text_format=text_format,
+                prompt_cache_key=prompt_cache_key,
+            )
+        ) as next_response:
+            async for event in next_response:
+                yield event
     else:
         logger.debug("total spent using %s = %s", ai_model.name, spend)
         yield response, spend
