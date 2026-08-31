@@ -54,17 +54,22 @@ Use `format_docstring` to customize a reusable tool description and
 `partial_with_doc` to bind arguments that should not be exposed to the model:
 
 ```python
-from mittal_ai import format_docstring, get_streaming_response, partial_with_doc
+from mittal_ai import (
+    ToolCallResult,
+    format_docstring,
+    get_streaming_response,
+    partial_with_doc,
+)
 
 
 @format_docstring(entity="company")
-def answer_question(_company_id: int, question: str) -> str:
+def answer_question(_company_id: int, question: str) -> ToolCallResult:
     """Answer a question about a {entity}.
 
     Args:
         - question: Question asked by the user.
     """
-    return f"{_company_id}: {question}"
+    return {"content": f"{_company_id}: {question}"}
 
 
 company_tool = partial_with_doc(answer_question, _company_id=123)
@@ -79,8 +84,8 @@ async for event in get_streaming_response(
     print(event)
 ```
 
-`company_tool` preserves the tool metadata while exposing only `question`; the
-bound company ID remains private.
+`company_tool` exposes only `question`; its bound company ID stays private. Tools
+return `ToolCallResult`; async generators may yield `EvalEvent` updates first.
 
 ## Publishing a new version
 
