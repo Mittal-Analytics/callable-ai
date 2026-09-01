@@ -8,6 +8,8 @@ from callable_ai import (
     parse_responses_usage,
 )
 
+SESSION_ID = "session-1"
+
 
 def get_model(provider="openrouter", **kwargs) -> AIModel:
     return AIModel(
@@ -38,13 +40,13 @@ def test_client_uses_model_base_url():
 def test_openrouter_options_use_model_configuration():
     model = get_model(openrouter_providers=["provider/fp8"])
 
-    assert get_model_options(model, "high") == {
+    assert get_model_options(model, "high", prompt_cache_key=SESSION_ID) == {
         "extra_headers": {
             "HTTP-Referer": "https://example.com",
             "X-Title": "Example AI",
         },
         "extra_body": {
-            "transforms": ["middle-out"],
+            "session_id": SESSION_ID,
             "provider": {"only": ["provider/fp8"]},
             "reasoning": {"effort": "high", "summary": "concise"},
         },
@@ -53,7 +55,7 @@ def test_openrouter_options_use_model_configuration():
 
 def test_extra_headers_are_used_for_any_provider():
     model = get_model(provider="compatible-provider")
-    options = get_model_options(model, None)
+    options = get_model_options(model, None, prompt_cache_key=SESSION_ID)
 
     assert options == {
         "extra_headers": {

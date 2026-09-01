@@ -22,6 +22,7 @@ class Summary(BaseModel):
     text: str
 
 
+conversation_id = "session-1"
 model = AIModel(
     name="openai/gpt-5.4",
     api_key="...",
@@ -41,12 +42,13 @@ async with get_client(model) as client:
         tools=[],
         text_format=Summary,
         reasoning_effort="low",
+        prompt_cache_key=conversation_id,
     ):
         print(event)
 ```
 
-The main public entry points are `get_response`, `get_streaming_response` and
-`get_structured_response`.
+`get_response`, `get_streaming_response` and `get_structured_response` reuse the
+required `prompt_cache_key` for tool-call follow-ups and OpenRouter routing.
 
 ## Tool helpers
 
@@ -73,9 +75,10 @@ def answer_question(_company_id: int, question: str) -> ToolCallResult:
 
 
 company_tool = partial_with_doc(answer_question, _company_id=123)
+conversation_id = "session-1"
 
 async for event in get_streaming_response(
-    user="user-123",
+    prompt_cache_key=conversation_id,
     ai_model=model,
     messages=[{"role": "user", "content": "What changed?"}],
     tools=[company_tool],

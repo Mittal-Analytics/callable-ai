@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.6 - 2026-09-01
+
+### Changed
+
+- Replaced the streaming `user` argument with a required `prompt_cache_key` across all response entry points.
+- Reused `prompt_cache_key` as the OpenRouter session ID for sticky provider routing across tool-call follow-ups.
+- Removed the OpenRouter `middle-out` message transform.
+
 ## 0.1.5 - 2026-09-01
 
 ### Changed

@@ -24,7 +24,7 @@ from typing import (
     cast,
 )
 
-from openai import AsyncOpenAI, AsyncStream, BadRequestError, Omit, omit
+from openai import AsyncOpenAI, AsyncStream, BadRequestError
 from openai.types.chat import (
     ChatCompletionAssistantMessageParam,
     ChatCompletionFunctionToolParam,
@@ -156,7 +156,11 @@ def get_client(model: AIModel) -> AsyncOpenAI:
     )
 
 
-def get_model_options(model: AIModel, reasoning_effort: Optional[str]) -> Dict:
+def get_model_options(
+    model: AIModel,
+    reasoning_effort: Optional[str],
+    prompt_cache_key: str,
+) -> Dict:
     options = defaultdict(dict)
     if reasoning_effort:
         options["reasoning_effort"] = reasoning_effort
@@ -164,8 +168,11 @@ def get_model_options(model: AIModel, reasoning_effort: Optional[str]) -> Dict:
         options["extra_headers"] = model.extra_headers
 
     if model.provider == "openrouter":
-        # https://openrouter.ai/docs/features/message-transforms
-        options["extra_body"]["transforms"] = ["middle-out"]
+        # Keep tool-call follow-up requests on the same OpenRouter provider.
+        # Supported by both APIs:
+        # https://openrouter.ai/docs/api/api-reference/chat/send-chat-completion-request
+        # https://openrouter.ai/docs/api/api-reference/responses/create-responses
+        options["extra_body"]["session_id"] = prompt_cache_key
         if model.openrouter_providers:
             # Some OpenRouter models need a specific provider for stable routing.
             options["extra_body"]["provider"] = {"only": model.openrouter_providers}
@@ -626,19 +633,20 @@ async def _process_tool_calls(
 
 async def get_streaming_response(
     *,
-    # user param improves cache routing, especially with lots of requests
-    # https://platform.openai.com/docs/guides/prompt-caching
-    # https://platform.openai.com/docs/guides/safety-best-practices#end-user-ids
-    user: str,
     ai_model: AIModel,
     messages: Messages,
     tools: List[ToolFunction],
     reasoning_effort: Optional[str],
+    prompt_cache_key: str,
     spend: float = 0,
     max_spend: float = 100,
 ) -> AsyncGenerator[StreamingResponseChunk, None]:
     client = get_client(ai_model)
-    options = get_model_options(ai_model, reasoning_effort=reasoning_effort)
+    options = get_model_options(
+        ai_model,
+        reasoning_effort=reasoning_effort,
+        prompt_cache_key=prompt_cache_key,
+    )
     tool_definitions = [_get_tools_definition(tool) for tool in tools]
 
     async def reply(
@@ -654,7 +662,7 @@ async def get_streaming_response(
                 stream=True,
                 stream_options={"include_usage": True},
                 store=False,
-                user=user,
+                prompt_cache_key=prompt_cache_key,
                 **options,
             )
         except BadRequestError:
@@ -819,7 +827,7 @@ async def get_response(
     tools: List[ToolFunction],
     client: AsyncOpenAI,
     reasoning_effort: Optional[str],
-    prompt_cache_key: str | Omit = omit,
+    prompt_cache_key: str,
     spend: float = 0,
     max_spend: float = 100,
 ) -> AsyncGenerator[EvalEvent | Tuple[Response, float], None]:
@@ -830,7 +838,13 @@ async def get_response(
         store=False,
         parallel_tool_calls=True,
         prompt_cache_key=prompt_cache_key,
-        **_get_responses_options(get_model_options(ai_model, reasoning_effort)),
+        **_get_responses_options(
+            get_model_options(
+                ai_model,
+                reasoning_effort,
+                prompt_cache_key=prompt_cache_key,
+            )
+        ),
     )
 
     # Extend the existing message history instead of replacing its list.
@@ -904,7 +918,7 @@ async def _get_structured_text_response(
     text_format: type[PydanticModel],
     client: AsyncOpenAI,
     reasoning_effort: Optional[str],
-    prompt_cache_key: str | Omit,
+    prompt_cache_key: str,
     spend: float,
     max_spend: float,
 ) -> AsyncGenerator[
@@ -981,7 +995,7 @@ async def get_structured_response(
     text_format: type[PydanticModel],
     client: AsyncOpenAI,
     reasoning_effort: Optional[str],
-    prompt_cache_key: str | Omit = omit,
+    prompt_cache_key: str,
     spend: float = 0,
     max_spend: float = 100,
 ) -> AsyncGenerator[
@@ -1014,7 +1028,13 @@ async def get_structured_response(
         parallel_tool_calls=True,
         text_format=text_format,
         prompt_cache_key=prompt_cache_key,
-        **_get_responses_options(get_model_options(ai_model, reasoning_effort)),
+        **_get_responses_options(
+            get_model_options(
+                ai_model,
+                reasoning_effort,
+                prompt_cache_key=prompt_cache_key,
+            )
+        ),
     )
 
     # Extend the existing message history instead of replacing its list.

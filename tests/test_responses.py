@@ -20,8 +20,10 @@ from callable_ai import (
 )
 from callable_ai.responses import INTERRUPTED_TOOL_OUTPUT, _process_tool_calls
 
+SESSION_ID = "session-1"
 
-def _get_model() -> AIModel:
+
+def _get_model(*, provider: str = "openai") -> AIModel:
     return AIModel(
         name="test-model",
         api_key="secret",
@@ -29,6 +31,7 @@ def _get_model() -> AIModel:
         input_tokens_cached_cost_usd=0,
         output_tokens_cost_usd=0,
         output_tokens_reasoning_cost_usd=0,
+        provider=provider,
     )
 
 
@@ -43,9 +46,40 @@ def _get_tool_call(
     )
 
 
+def _get_chat_chunk(
+    *,
+    content: str | None = None,
+    tool_calls: list[ChoiceDeltaToolCall] | None = None,
+) -> ChatCompletionChunk:
+    return ChatCompletionChunk(
+        id="response-1",
+        created=0,
+        choices=[
+            Choice(
+                index=0,
+                delta=ChoiceDelta(content=content, tool_calls=tool_calls),
+            )
+        ],
+        model="test-model",
+        object="chat.completion.chunk",
+    )
+
+
+def answer(question: str) -> ToolCallResult:
+    """Answer a question.
+
+    Args:
+        - question: Question to answer.
+    """
+    return {"content": question}
+
+
 class MockStream:
-    def __init__(self):
+    def __init__(self, chunks: list[ChatCompletionChunk] | None = None):
         self.closed = False
+        self.chunks = (
+            chunks if chunks is not None else [_get_chat_chunk(content="hello")]
+        )
 
     async def __aenter__(self):
         return self
@@ -57,50 +91,133 @@ class MockStream:
         return self._chunks()
 
     async def _chunks(self):
-        yield ChatCompletionChunk(
-            id="response-1",
-            created=0,
-            choices=[Choice(index=0, delta=ChoiceDelta(content="hello"))],
-            model="test-model",
-            object="chat.completion.chunk",
-        )
+        for chunk in self.chunks:
+            yield chunk
 
 
 class MockCompletions:
-    def __init__(self, stream):
-        self.stream = stream
+    def __init__(self, streams: list[MockStream]):
+        self.streams = streams.copy()
+        self.calls: list[dict[str, Any]] = []
 
-    async def create(self, **_kwargs):
-        return self.stream
+    async def create(self, **kwargs) -> MockStream:
+        self.calls.append(kwargs)
+        return self.streams.pop(0)
 
 
 class MockClient:
-    def __init__(self, stream):
-        self.chat = type("Chat", (), {"completions": MockCompletions(stream)})()
+    def __init__(self, streams: list[MockStream]):
+        self.chat = type("Chat", (), {"completions": MockCompletions(streams)})()
         self.closed = False
 
     async def close(self):
         self.closed = True
 
 
-async def test_closing_stream_stops_response_and_closes_client(monkeypatch):
+async def test_stream_forwards_cache_key_and_closes_resources(monkeypatch):
     stream = MockStream()
-    client = MockClient(stream)
+    client = MockClient([stream])
     monkeypatch.setattr("callable_ai.responses.get_client", lambda _model: client)
 
     async with aclosing(
         get_streaming_response(
-            user="user-1",
             ai_model=_get_model(),
             messages=[{"role": "user", "content": "hello"}],
             tools=[],
             reasoning_effort=None,
+            prompt_cache_key=SESSION_ID,
         )
     ) as response:
         assert await anext(response) == "hello"
 
     assert stream.closed
     assert client.closed
+    assert client.chat.completions.calls[0]["prompt_cache_key"] == SESSION_ID
+
+
+async def test_openrouter_chat_tool_calls_reuse_session_id(monkeypatch):
+    client = MockClient(
+        [
+            MockStream(
+                [
+                    _get_chat_chunk(
+                        tool_calls=[_get_tool_call("answer", '{"question":"hello"}')]
+                    )
+                ]
+            ),
+            MockStream(),
+        ]
+    )
+    monkeypatch.setattr("callable_ai.responses.get_client", lambda _model: client)
+
+    events = [
+        event
+        async for event in get_streaming_response(
+            ai_model=_get_model(provider="openrouter"),
+            messages=[{"role": "user", "content": "hello"}],
+            tools=[answer],
+            reasoning_effort=None,
+            prompt_cache_key=SESSION_ID,
+        )
+    ]
+
+    assert events[-1] == "hello"
+    assert [call["prompt_cache_key"] for call in client.chat.completions.calls] == [
+        SESSION_ID,
+        SESSION_ID,
+    ]
+    assert [
+        call["extra_body"]["session_id"] for call in client.chat.completions.calls
+    ] == [SESSION_ID, SESSION_ID]
+
+
+async def test_openrouter_response_tool_calls_reuse_session_id():
+    first_response = Response.model_construct(
+        output=[
+            ResponseFunctionToolCall(
+                arguments='{"question":"hello"}',
+                call_id="call-1",
+                name="answer",
+                type="function_call",
+            )
+        ],
+        usage=None,
+    )
+    second_response = Response.model_construct(output=[], usage=None)
+
+    class MockResponses:
+        def __init__(self):
+            self.responses = [first_response, second_response]
+            self.calls: list[dict[str, Any]] = []
+
+        async def create(self, **kwargs) -> Response:
+            self.calls.append(kwargs)
+            return self.responses.pop(0)
+
+    responses = MockResponses()
+    client = type("Client", (), {"responses": responses})()
+
+    events = [
+        event
+        async for event in get_response(
+            ai_model=_get_model(provider="openrouter"),
+            input=[],
+            tools=[answer],
+            client=cast(Any, client),
+            reasoning_effort=None,
+            prompt_cache_key=SESSION_ID,
+        )
+    ]
+
+    assert events[-1] == (second_response, 0)
+    assert [call["prompt_cache_key"] for call in responses.calls] == [
+        SESSION_ID,
+        SESSION_ID,
+    ]
+    assert [call["extra_body"]["session_id"] for call in responses.calls] == [
+        SESSION_ID,
+        SESSION_ID,
+    ]
 
 
 async def test_chat_completion_normalizes_tool_calls_and_forwards_progress():
@@ -241,6 +358,7 @@ async def test_closing_response_cancels_tool_after_forwarded_event():
             tools=[wait_forever],
             client=cast(Any, client),
             reasoning_effort=None,
+            prompt_cache_key=SESSION_ID,
         )
     ) as events:
         assert await anext(events) == {
