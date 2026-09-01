@@ -1,6 +1,6 @@
 from openai.types.responses.response_usage import ResponseUsage
 
-from mittal_ai import (
+from callable_ai import (
     AIModel,
     get_abs_cost,
     get_client,

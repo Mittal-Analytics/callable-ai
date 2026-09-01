@@ -11,14 +11,14 @@ from openai.types.chat.chat_completion_chunk import (
 )
 from openai.types.responses import Response, ResponseFunctionToolCall
 
-from mittal_ai import (
+from callable_ai import (
     AIModel,
     EvalEvent,
     ToolCallResult,
     get_response,
     get_streaming_response,
 )
-from mittal_ai.responses import INTERRUPTED_TOOL_OUTPUT, _process_tool_calls
+from callable_ai.responses import INTERRUPTED_TOOL_OUTPUT, _process_tool_calls
 
 
 def _get_model() -> AIModel:
@@ -86,7 +86,7 @@ class MockClient:
 async def test_closing_stream_stops_response_and_closes_client(monkeypatch):
     stream = MockStream()
     client = MockClient(stream)
-    monkeypatch.setattr("mittal_ai.responses.get_client", lambda _model: client)
+    monkeypatch.setattr("callable_ai.responses.get_client", lambda _model: client)
 
     async with aclosing(
         get_streaming_response(

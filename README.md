@@ -1,7 +1,7 @@
-# mittal-ai
+# callable-ai
 
-Mittal Analytics' reusable AI harness. Install it as `mittal-ai` and import it as
-`mittal_ai`. It provides:
+A callable-first AI harness from Mittal Analytics. Install it as `callable-ai`
+and import it as `callable_ai`. It provides:
 
 - streaming, non-streaming and structured LLM responses;
 - tool-call handling, reusable tool helpers and message-history repair;
@@ -14,7 +14,7 @@ The application keeps its API keys. The model declares which provider and base U
 the harness should use:
 
 ```python
-from mittal_ai import AIModel, get_client, get_structured_response
+from callable_ai import AIModel, get_client, get_structured_response
 from pydantic import BaseModel
 
 
@@ -54,7 +54,7 @@ Use `format_docstring` to customize a reusable tool description and
 `partial_with_doc` to bind arguments that should not be exposed to the model:
 
 ```python
-from mittal_ai import (
+from callable_ai import (
     ToolCallResult,
     format_docstring,
     get_streaming_response,
@@ -90,7 +90,8 @@ return `ToolCallResult`; async generators may yield `EvalEvent` updates first.
 ## Publishing a new version
 
 The [release workflow](.github/workflows/release.yml) publishes version tags to
-PyPI using trusted publishing. From a clean working tree, publish the next patch
+PyPI using trusted publishing. Configure `callable-ai` as a trusted publisher on
+PyPI before its first release. From a clean working tree, publish the next patch
 release with:
 
 ```bash

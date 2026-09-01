@@ -1,7 +1,7 @@
 from openai.types.responses.response_usage import ResponseUsage
 
-from mittal_ai.models import AIModel
-from mittal_ai.openrouter import OpenRouterCompletionUsage
+from callable_ai.models import AIModel
+from callable_ai.openrouter import OpenRouterCompletionUsage
 
 
 def parse_responses_usage(responses_usage: ResponseUsage) -> OpenRouterCompletionUsage:

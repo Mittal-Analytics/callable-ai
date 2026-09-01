@@ -50,10 +50,10 @@ from openai.types.responses.response_output_text_param import (
 )
 from pydantic import BaseModel, ValidationError
 
-from mittal_ai import compatibility
-from mittal_ai.costing import get_abs_cost, parse_responses_usage
-from mittal_ai.models import AIModel
-from mittal_ai.openrouter import (
+from callable_ai import compatibility
+from callable_ai.costing import get_abs_cost, parse_responses_usage
+from callable_ai.models import AIModel
+from callable_ai.openrouter import (
     OpenRouterChatCompletionChunk,
     OpenRouterCompletionUsage,
     OpenRouterReasoningDetail,

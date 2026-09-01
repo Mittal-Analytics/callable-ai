@@ -1,6 +1,6 @@
-from mittal_ai.costing import get_abs_cost, parse_responses_usage
-from mittal_ai.models import AIModel
-from mittal_ai.responses import (
+from callable_ai.costing import get_abs_cost, parse_responses_usage
+from callable_ai.models import AIModel
+from callable_ai.responses import (
     AnnotationToolCallURL,
     EvalEvent,
     Messages,
@@ -16,7 +16,7 @@ from mittal_ai.responses import (
     get_structured_response,
     repair_message_history,
 )
-from mittal_ai.tools import format_docstring, partial_with_doc
+from callable_ai.tools import format_docstring, partial_with_doc
 
 __all__ = [
     "AIModel",

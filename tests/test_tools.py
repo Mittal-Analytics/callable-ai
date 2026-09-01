@@ -1,8 +1,8 @@
 from enum import Enum
 from inspect import signature
 
-from mittal_ai import format_docstring, partial_with_doc
-from mittal_ai.responses import _parse_docs
+from callable_ai import format_docstring, partial_with_doc
+from callable_ai.responses import _parse_docs
 
 
 def test_format_docstring():
