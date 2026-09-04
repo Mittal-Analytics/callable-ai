@@ -14,11 +14,17 @@ from openai.types.responses import Response, ResponseFunctionToolCall
 from callable_ai import (
     AIModel,
     EvalEvent,
+    Messages,
     ToolCallResult,
     get_response,
     get_streaming_response,
 )
-from callable_ai.responses import INTERRUPTED_TOOL_OUTPUT, _process_tool_calls
+from callable_ai.openrouter import OpenRouterReasoningDetail
+from callable_ai.responses import (
+    INTERRUPTED_TOOL_OUTPUT,
+    _gather_reasoning_details_chunks,
+    _process_tool_calls,
+)
 
 SESSION_ID = "session-1"
 
@@ -63,6 +69,15 @@ def _get_chat_chunk(
         model="test-model",
         object="chat.completion.chunk",
     )
+
+
+def _set_reasoning_details(
+    chunk: ChatCompletionChunk,
+    reasoning_details: list[OpenRouterReasoningDetail],
+) -> ChatCompletionChunk:
+    # OpenAI's chunk type does not include OpenRouter reasoning details.
+    chunk.choices[0].delta.__dict__["reasoning_details"] = reasoning_details
+    return chunk
 
 
 def answer(question: str) -> ToolCallResult:
@@ -114,6 +129,75 @@ class MockClient:
         self.closed = True
 
 
+def test_gather_reasoning_details_combines_unsigned_text():
+    chunks: list[OpenRouterReasoningDetail] = [
+        {"type": "reasoning.text", "format": "unknown", "text": "think"},
+        {"type": "reasoning.text", "format": "unknown", "text": "ing"},
+    ]
+
+    assert _gather_reasoning_details_chunks(chunks) == [
+        {"type": "reasoning.text", "format": "unknown", "text": "thinking"}
+    ]
+
+
+def test_gather_reasoning_details_ignores_empty_text():
+    chunks: list[OpenRouterReasoningDetail] = [
+        {"type": "reasoning.text", "format": "unknown", "text": ""}
+    ]
+
+    assert _gather_reasoning_details_chunks(chunks) == []
+
+
+async def test_stream_combines_openrouter_gemini_reasoning_details(monkeypatch):
+    reasoning_text: OpenRouterReasoningDetail = {
+        "type": "reasoning.text",
+        "text": "thinking",
+        "format": "google-gemini-v1",
+        "index": 0,
+    }
+    signature: OpenRouterReasoningDetail = {
+        "type": "reasoning.text",
+        "signature": "signature",
+        "format": "google-gemini-v1",
+        "index": 0,
+    }
+    stream = MockStream(
+        [
+            _set_reasoning_details(_get_chat_chunk(), [reasoning_text]),
+            _set_reasoning_details(_get_chat_chunk(content="hello"), [signature]),
+        ]
+    )
+    client = MockClient([stream])
+    monkeypatch.setattr("callable_ai.responses.get_client", lambda _model: client)
+    messages: Messages = [{"role": "user", "content": "hello"}]
+
+    chunks = [
+        chunk
+        async for chunk in get_streaming_response(
+            ai_model=_get_model(provider="openrouter"),
+            messages=messages,
+            tools=[],
+            reasoning_effort=None,
+            prompt_cache_key=SESSION_ID,
+        )
+    ]
+
+    assert chunks == [reasoning_text, "hello"]
+    assert messages[-1] == {
+        "role": "assistant",
+        "content": "hello",
+        "reasoning_details": [
+            {
+                "type": "reasoning.text",
+                "format": "google-gemini-v1",
+                "index": 0,
+                "text": "thinking",
+                "signature": "signature",
+            }
+        ],
+    }
+
+
 async def test_stream_forwards_cache_key_and_closes_resources(monkeypatch):
     stream = MockStream()
     client = MockClient([stream])
@@ -132,7 +216,30 @@ async def test_stream_forwards_cache_key_and_closes_resources(monkeypatch):
 
     assert stream.closed
     assert client.closed
-    assert client.chat.completions.calls[0]["prompt_cache_key"] == SESSION_ID
+    request = client.chat.completions.calls[0]
+    assert request["prompt_cache_key"] == SESSION_ID
+    assert request["store"] is False
+
+
+async def test_google_stream_omits_unsupported_openai_options(monkeypatch):
+    client = MockClient([MockStream()])
+    monkeypatch.setattr("callable_ai.responses.get_client", lambda _model: client)
+
+    chunks = [
+        chunk
+        async for chunk in get_streaming_response(
+            ai_model=_get_model(provider="google"),
+            messages=[{"role": "user", "content": "hello"}],
+            tools=[],
+            reasoning_effort=None,
+            prompt_cache_key=SESSION_ID,
+        )
+    ]
+
+    assert chunks == ["hello"]
+    request = client.chat.completions.calls[0]
+    assert "prompt_cache_key" not in request
+    assert "store" not in request
 
 
 async def test_openrouter_chat_tool_calls_reuse_session_id(monkeypatch):

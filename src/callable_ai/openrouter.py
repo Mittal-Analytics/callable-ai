@@ -6,9 +6,9 @@ from openai.types.chat.chat_completion_chunk import ChoiceDelta
 
 
 class ReasoningDetailBase(TypedDict):
-    id: Optional[str]
-    format: Literal["unknown", "openai-responses-v1", "anthropic-claude-v1"]
-    index: Optional[int]
+    id: NotRequired[Optional[str]]
+    format: str
+    index: NotRequired[Optional[int]]
 
 
 class ReasoningDetailSummaryType(ReasoningDetailBase):
@@ -23,7 +23,7 @@ class ReasoningDetailEncryptedType(ReasoningDetailBase):
 
 class ReasoningDetailTextType(ReasoningDetailBase):
     type: Literal["reasoning.text"]
-    text: str
+    text: NotRequired[str]
     signature: NotRequired[Optional[str]]
 
 

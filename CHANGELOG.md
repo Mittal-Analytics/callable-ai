@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.7 - 2026-09-04
+
+### Fixed
+
+- Preserved OpenRouter Gemini signature-only reasoning details without emitting malformed text events.
+- Removed unsupported request fields from Google OpenAI-compatible streaming calls.
+
 ## 0.1.6 - 2026-09-01
 
 ### Changed

@@ -1,6 +1,6 @@
 [project]
 name = "callable-ai"
-version = "0.1.6"
+version = "0.1.7"
 description = "Callable-first AI response and tool harness"
 readme = "README.md"
 authors = [{ name = "Mittal Analytics Pvt Ltd" }]

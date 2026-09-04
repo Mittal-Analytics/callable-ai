@@ -307,7 +307,7 @@ def _parse_tool_call(
 
 def _gather_reasoning_details_chunks(
     reasoning_detail_chunks: List[OpenRouterReasoningDetail],
-):
+) -> List[OpenRouterReasoningDetail]:
     def get_key(chunk):
         key = {"type": chunk["type"], "format": chunk["format"]}
         if "id" in chunk:
@@ -327,13 +327,26 @@ def _gather_reasoning_details_chunks(
             )
         elif key["type"] == "reasoning.text":
             texts = cast(List[ReasoningDetailTextType], items)
-            grouped.append(
-                {
-                    **key,
-                    "text": "".join(item["text"] for item in texts),
-                    "signature": texts[0].get("signature"),
-                }
+            text = "".join(item.get("text", "") for item in texts)
+            # OpenRouter streams Gemini signatures after text in a separate chunk.
+            signature = next(
+                (
+                    item.get("signature")
+                    for item in reversed(texts)
+                    if item.get("signature")
+                ),
+                None,
             )
+            # Providers may emit empty placeholder details while streaming.
+            if not text and not signature:
+                continue
+
+            detail: ReasoningDetailTextType = cast(ReasoningDetailTextType, {**key})
+            if text:
+                detail["text"] = text
+            if signature:
+                detail["signature"] = signature
+            grouped.append(detail)
         else:
             grouped.extend(cast(List[ReasoningDetailEncryptedType], items))
     return grouped
@@ -647,6 +660,10 @@ async def get_streaming_response(
         reasoning_effort=reasoning_effort,
         prompt_cache_key=prompt_cache_key,
     )
+    # Google's OpenAI-compatible API rejects these OpenAI request fields.
+    if ai_model.provider != "google":
+        options["store"] = False
+        options["prompt_cache_key"] = prompt_cache_key
     tool_definitions = [_get_tools_definition(tool) for tool in tools]
 
     async def reply(
@@ -661,8 +678,6 @@ async def get_streaming_response(
                 tools=tool_definitions,
                 stream=True,
                 stream_options={"include_usage": True},
-                store=False,
-                prompt_cache_key=prompt_cache_key,
                 **options,
             )
         except BadRequestError:
@@ -704,7 +719,8 @@ async def get_streaming_response(
                         for obj in reasoning_details:
                             if obj["type"] == "reasoning.summary":
                                 yield obj
-                            elif obj["type"] == "reasoning.text":
+                            elif obj["type"] == "reasoning.text" and obj.get("text"):
+                                # OpenRouter also emits Gemini signature-only details for the next turn.
                                 yield obj
                     if delta.tool_calls:
                         tool_call_chunks += delta.tool_calls
