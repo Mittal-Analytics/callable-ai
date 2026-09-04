@@ -691,6 +691,7 @@ async def get_streaming_response(
             return
 
         accumulated_content = ""
+        usage_details: UsageDetails | None = None
         tool_call_chunks: List[ChoiceDeltaToolCall] = []
         reasoning_detail_chunks: List[OpenRouterReasoningDetail] = []
         async with stream_response as raw_stream:
@@ -703,10 +704,11 @@ async def get_streaming_response(
                         if isinstance(chunk.usage, CompletionUsage)
                         else chunk.usage,
                     )
-                    cost = get_abs_cost(usage, ai_model=ai_model)
-                    spend += cost
-                    yield UsageDetails(
-                        id=chunk.id, model=chunk.model, usage=usage, cost=cost
+                    usage_details = UsageDetails(
+                        id=chunk.id,
+                        model=chunk.model,
+                        usage=usage,
+                        cost=get_abs_cost(usage, ai_model=ai_model),
                     )
                 if chunk.choices:
                     delta = chunk.choices[0].delta
@@ -724,6 +726,11 @@ async def get_streaming_response(
                                 yield obj
                     if delta.tool_calls:
                         tool_call_chunks += delta.tool_calls
+
+        # Gemini repeats cumulative usage on multiple streaming chunks.
+        if usage_details is not None:
+            spend += usage_details["cost"]
+            yield usage_details
 
         message: OpenRouterAssistantMessageParam = {"role": "assistant"}
         if accumulated_content:

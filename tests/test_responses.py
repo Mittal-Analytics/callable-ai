@@ -9,6 +9,7 @@ from openai.types.chat.chat_completion_chunk import (
     ChoiceDeltaToolCall,
     ChoiceDeltaToolCallFunction,
 )
+from openai.types.completion_usage import CompletionUsage
 from openai.types.responses import Response, ResponseFunctionToolCall
 
 from callable_ai import (
@@ -196,6 +197,45 @@ async def test_stream_combines_openrouter_gemini_reasoning_details(monkeypatch):
             }
         ],
     }
+
+
+async def test_stream_emits_only_final_cumulative_usage(monkeypatch):
+    first = _get_chat_chunk(content="hel")
+    first.usage = CompletionUsage(
+        completion_tokens=1, prompt_tokens=10, total_tokens=11
+    )
+    final = _get_chat_chunk(content="lo")
+    final.usage = CompletionUsage(
+        completion_tokens=2, prompt_tokens=10, total_tokens=12
+    )
+    client = MockClient([MockStream([first, final])])
+    monkeypatch.setattr("callable_ai.responses.get_client", lambda _model: client)
+
+    chunks = [
+        chunk
+        async for chunk in get_streaming_response(
+            ai_model=_get_model(),
+            messages=[{"role": "user", "content": "hello"}],
+            tools=[],
+            reasoning_effort=None,
+            prompt_cache_key=SESSION_ID,
+        )
+    ]
+
+    assert chunks == [
+        "hel",
+        "lo",
+        {
+            "id": "response-1",
+            "model": "test-model",
+            "usage": {
+                "completion_tokens": 2,
+                "prompt_tokens": 10,
+                "total_tokens": 12,
+            },
+            "cost": 0,
+        },
+    ]
 
 
 async def test_stream_forwards_cache_key_and_closes_resources(monkeypatch):

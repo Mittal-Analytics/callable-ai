@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.8 - 2026-09-04
+
+### Fixed
+
+- Emitted only the final cumulative usage reported by streaming providers.
+
 ## 0.1.7 - 2026-09-04
 
 ### Fixed
