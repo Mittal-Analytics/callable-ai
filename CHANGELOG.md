@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.9 - 2026-09-17
+
+### Fixed
+
+- Deferred structured-response parsing until tool calls finish, allowing plain-text commentary on tool turns.
+- Retained model output in history when structured-output validation fails, allowing corrective follow-ups.
+
 ## 0.1.8 - 2026-09-04
 
 ### Fixed

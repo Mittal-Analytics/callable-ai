@@ -25,6 +25,7 @@ from typing import (
 )
 
 from openai import AsyncOpenAI, AsyncStream, BadRequestError
+from openai.lib._parsing._responses import parse_response, type_to_text_format_param
 from openai.types.chat import (
     ChatCompletionAssistantMessageParam,
     ChatCompletionFunctionToolParam,
@@ -1025,6 +1026,17 @@ async def get_structured_response(
     EvalEvent | Tuple[ParsedResponse[PydanticModel], float],
     None,
 ]:
+    """Yield progress events and a final (parsed response, spend) tuple.
+
+    Invalid JSON or text that does not match ``text_format`` raises
+    ``pydantic.ValidationError`` during iteration rather than yielding None.
+    The plain-text compatibility path retries once before propagating the error.
+    Actual model output remains in ``input`` so callers can follow up with
+    corrective instructions after a validation failure.
+
+    On the native structured-output path, a response without output text
+    (e.g. a refusal) can instead yield a response with ``output_parsed=None``.
+    """
     if not compatibility.supports_structured_output_with_tools(ai_model):
         async with aclosing(
             _get_structured_text_response(
@@ -1043,13 +1055,15 @@ async def get_structured_response(
                 yield event
         return
 
-    response = await client.responses.parse(
+    # Meta tool-call turns may include plain-text commentary.
+    # Send the same structured-output schema, but defer parsing until the final turn.
+    response = await client.responses.create(
         model=ai_model.name,
         tools=[_get_response_tools_definition(tool) for tool in tools],
         input=input,
         store=False,
         parallel_tool_calls=True,
-        text_format=text_format,
+        text={"format": type_to_text_format_param(text_format)},
         prompt_cache_key=prompt_cache_key,
         **_get_responses_options(
             get_model_options(
@@ -1060,7 +1074,7 @@ async def get_structured_response(
         ),
     )
 
-    # Extend the existing message history instead of replacing its list.
+    # Keep actual output in history so callers can follow up after validation errors.
     input.extend(cast(ResponseInputParam, response.output))
     spend += (
         get_abs_cost(parse_responses_usage(response.usage), ai_model=ai_model)
@@ -1121,4 +1135,7 @@ async def get_structured_response(
                 yield event
     else:
         logger.debug("total spent using %s = %s", ai_model.name, spend)
-        yield response, spend
+        yield (
+            parse_response(text_format=text_format, input_tools=[], response=response),
+            spend,
+        )
