@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.10 - 2026-09-17
+
+### Changed
+
+- Required OpenAI SDK 3.14.1 or newer (below 4), using HTTPX2 and the operating-system certificate store.
+- Replaced private parsing helpers with the official `responses.parse`, which skips explicitly marked commentary.
+- Structured-output validation errors now occur before the failed response is appended to history.
+
 ## 0.1.9 - 2026-09-17
 
 ### Fixed

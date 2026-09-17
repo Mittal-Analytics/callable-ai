@@ -2,9 +2,8 @@ import asyncio
 import json
 from contextlib import aclosing
 from typing import Any, AsyncIterator, cast
-from unittest.mock import AsyncMock
 
-import httpx
+import httpx2
 import pytest
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionChunk
@@ -538,8 +537,10 @@ async def test_closing_response_cancels_tool_after_forwarded_event():
 
 
 @pytest.mark.parametrize("provider", ["meta", "openai", "openrouter"])
-async def test_structured_response_parses_final_answer_not_tool_commentary(
+@pytest.mark.parametrize("final_phase", [None, "final_answer"])
+async def test_structured_response_parses_answer_not_commentary(
     provider: str,
+    final_phase: str | None,
 ):
     def read_report(document_id: int) -> ToolCallResult:
         """Read the annual report.
@@ -551,7 +552,7 @@ async def test_structured_response_parses_final_answer_not_tool_commentary(
 
     requests: list[dict[str, Any]] = []
 
-    def respond(request: httpx.Request) -> httpx.Response:
+    def respond(request: httpx2.Request) -> httpx2.Response:
         payload = json.loads(request.content)
         requests.append(payload)
         assert payload["text"]["format"]["type"] == "json_schema"
@@ -588,19 +589,24 @@ async def test_structured_response_parses_final_answer_not_tool_commentary(
                 },
             ]
         else:
-            assert payload["input"][1] == commentary
+            # SDK-parsed commentary is retained with no structured value.
+            assert payload["input"][1] == {
+                **commentary,
+                "content": [{**commentary["content"][0], "parsed": None}],
+            }
             assert payload["input"][-1] == {
                 "type": "function_call_output",
                 "call_id": "call-1",
                 "output": "Capacity doubled.",
             }
             output = [
+                commentary,
                 {
                     "type": "message",
                     "id": "answer",
                     "role": "assistant",
                     "status": "completed",
-                    "phase": "final_answer",
+                    "phase": final_phase,
                     "content": [
                         {
                             "type": "output_text",
@@ -610,7 +616,7 @@ async def test_structured_response_parses_final_answer_not_tool_commentary(
                     ],
                 },
             ]
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "id": f"response-{len(requests)}",
@@ -627,7 +633,7 @@ async def test_structured_response_parses_final_answer_not_tool_commentary(
 
     async with AsyncOpenAI(
         api_key="test",
-        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+        http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(respond)),
     ) as client:
         events = [
             event
@@ -649,43 +655,49 @@ async def test_structured_response_parses_final_answer_not_tool_commentary(
 
 
 @pytest.mark.parametrize("text", ["Not JSON", '{"wrong_field":"value"}'])
-async def test_structured_response_keeps_invalid_answer_for_follow_up(text: str):
-    response = Response.model_validate(
-        {
-            "id": "response-1",
-            "object": "response",
-            "created_at": 0,
-            "model": "test-model",
-            "output": [
-                {
-                    "type": "message",
-                    "id": "answer",
-                    "role": "assistant",
-                    "status": "completed",
-                    "content": [
-                        {"type": "output_text", "text": text, "annotations": []}
-                    ],
-                }
-            ],
-            "parallel_tool_calls": True,
-            "tool_choice": "auto",
-            "tools": [],
-        }
-    )
-    client = AsyncMock(spec=AsyncOpenAI)
-    client.responses.create = AsyncMock(return_value=response)
+@pytest.mark.parametrize("phase", [None, "final_answer"])
+async def test_structured_response_raises_for_invalid_answer(
+    text: str, phase: str | None
+):
+    response = {
+        "id": "response-1",
+        "object": "response",
+        "created_at": 0,
+        "model": "test-model",
+        "output": [
+            {
+                "type": "message",
+                "id": "answer",
+                "role": "assistant",
+                "status": "completed",
+                "phase": phase,
+                "content": [{"type": "output_text", "text": text, "annotations": []}],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+    }
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=response)
+
     history: ResponseInputParam = [{"role": "user", "content": "Summarize."}]
 
-    with pytest.raises(ValidationError):
-        async for _ in get_structured_response(
-            ai_model=_get_model(),
-            input=history,
-            tools=[],
-            text_format=StructuredAnswer,
-            client=client,
-            reasoning_effort=None,
-            prompt_cache_key=SESSION_ID,
-        ):
-            pass
+    async with AsyncOpenAI(
+        api_key="test",
+        http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(respond)),
+    ) as client:
+        with pytest.raises(ValidationError):
+            async for _ in get_structured_response(
+                ai_model=_get_model(),
+                input=history,
+                tools=[],
+                text_format=StructuredAnswer,
+                client=client,
+                reasoning_effort=None,
+                prompt_cache_key=SESSION_ID,
+            ):
+                pass
 
-    assert history == [{"role": "user", "content": "Summarize."}, *response.output]
+    assert history == [{"role": "user", "content": "Summarize."}]

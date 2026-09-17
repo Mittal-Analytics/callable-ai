@@ -1,12 +1,12 @@
 [project]
 name = "callable-ai"
-version = "0.1.9"
+version = "0.1.10"
 description = "Callable-first AI response and tool harness"
 readme = "README.md"
 authors = [{ name = "Mittal Analytics Pvt Ltd" }]
 requires-python = ">=3.12"
 dependencies = [
-    "openai>=2.38,<3",
+    "openai>=3.14.1,<4",
     "pydantic>=2.12,<3",
 ]
 
@@ -24,6 +24,7 @@ module-name = "callable_ai"
 
 [dependency-groups]
 dev = [
+    "httpx2",
     "pre-commit>=4.6.2",
     "pytest",
     "pytest-asyncio",
