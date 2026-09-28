@@ -426,10 +426,11 @@ async def _run_tool_call_with_events(
         else:
             result = cast(ToolCallResult, function_result)
     except Exception as error:
-        logger.warning(
+        logger.error(
             "Tool call failed: tool=%s arguments=%r",
             function.__name__,  # type: ignore
             kwargs,
+            exc_info=True,
         )
         result = error
 
