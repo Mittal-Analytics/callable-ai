@@ -177,6 +177,12 @@ def get_model_options(
             # Some OpenRouter models need a specific provider for stable routing.
             options["extra_body"]["provider"] = {"only": model.openrouter_providers}
 
+        # Anthropic only caches marked prompts. Automatic caching marks the end of
+        # every request, so tool loops reread history at the cached price.
+        # Providers that cache on their own (OpenAI, Gemini) ignore this field.
+        # https://openrouter.ai/docs/features/prompt-caching
+        options["extra_body"]["cache_control"] = {"type": "ephemeral"}
+
         if "reasoning_effort" in options:
             # open-router supports passing `efforts` attribute in completions api
             # this is otherwise available only in responses api
@@ -341,7 +347,7 @@ def _gather_reasoning_details_chunks(
             if not text and not signature:
                 continue
 
-            detail: ReasoningDetailTextType = cast(ReasoningDetailTextType, {**key})
+            detail: ReasoningDetailTextType = {**key}
             if text:
                 detail["text"] = text
             if signature:

@@ -30,6 +30,7 @@ model = AIModel(
     base_url="https://openrouter.ai/api/v1",
     input_tokens_cost_usd=2.5,
     input_tokens_cached_cost_usd=0.25,
+    input_tokens_cache_write_cost_usd=2.5,
     output_tokens_cost_usd=15,
     output_tokens_reasoning_cost_usd=15,
 )

@@ -76,6 +76,9 @@ class OpenRouterPromptTokensDetails(TypedDict, total=False):
     cached_tokens: Optional[int]
     """Cached tokens present in the prompt."""
 
+    cache_write_tokens: Optional[int]
+    """Prompt tokens written to the cache, which some providers bill at a premium."""
+
 
 class OpenRouterCompletionUsage(TypedDict):
     completion_tokens: int

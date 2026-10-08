@@ -50,6 +50,7 @@ def _get_model(*, provider: str = "openai") -> AIModel:
         api_key="secret",
         input_tokens_cost_usd=0,
         input_tokens_cached_cost_usd=0,
+        input_tokens_cache_write_cost_usd=0,
         output_tokens_cost_usd=0,
         output_tokens_reasoning_cost_usd=0,
         provider=provider,

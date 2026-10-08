@@ -7,6 +7,7 @@ from callable_ai import (
     get_model_options,
     parse_responses_usage,
 )
+from callable_ai.openrouter import OpenRouterCompletionUsage
 
 SESSION_ID = "session-1"
 
@@ -23,6 +24,7 @@ def get_model(provider="openrouter", **kwargs) -> AIModel:
         },
         input_tokens_cost_usd=1,
         input_tokens_cached_cost_usd=0.5,
+        input_tokens_cache_write_cost_usd=1.25,
         output_tokens_cost_usd=2,
         output_tokens_reasoning_cost_usd=2,
         **kwargs,
@@ -48,6 +50,7 @@ def test_openrouter_options_use_model_configuration():
         "extra_body": {
             "session_id": SESSION_ID,
             "provider": {"only": ["provider/fp8"]},
+            "cache_control": {"type": "ephemeral"},
             "reasoning": {"effort": "high", "summary": "concise"},
         },
     }
@@ -95,8 +98,36 @@ def test_responses_usage_handles_missing_token_details():
 
     assert parse_responses_usage(usage) == {
         "prompt_tokens": 100,
-        "prompt_tokens_details": {"cached_tokens": 0},
+        "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
         "completion_tokens": 20,
         "completion_tokens_details": {"reasoning_tokens": 0},
         "total_tokens": 120,
+    }
+
+
+def test_cost_bills_cache_writes_at_their_own_price():
+    usage: OpenRouterCompletionUsage = {
+        "prompt_tokens": 1_000_000,
+        "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 400_000},
+        "completion_tokens": 0,
+        "total_tokens": 1_000_000,
+    }
+    # 600k fresh tokens at $1 and 400k writes at $1.25 per million.
+    assert get_abs_cost(usage, get_model(usd_to_inr_rate=100)) == 110
+
+
+def test_responses_usage_reads_openrouter_cache_writes():
+    usage = ResponseUsage.model_validate(
+        {
+            "input_tokens": 14415,
+            "input_tokens_details": {"cache_write_tokens": 14411, "cached_tokens": 0},
+            "output_tokens": 4,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 14419,
+        }
+    )
+
+    assert parse_responses_usage(usage)["prompt_tokens_details"] == {
+        "cached_tokens": 0,
+        "cache_write_tokens": 14411,
     }

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0 - 2026-10-08
+
+### Breaking
+
+- `AIModel.input_tokens_cache_write_cost_usd` is now required. Anthropic and OpenAI GPT-5.6+ bill cache writes at 1.25x input; use the input price for providers without a write premium.
+
+### Changed
+
+- Enabled OpenRouter's automatic prompt caching on all requests. Anthropic models only cache marked prompts, so tool-call turns now reread history at the cached input price.
+- Costing bills OpenRouter's `cache_write_tokens` at the cache-write price, on both APIs.
+
 ## 0.1.10 - 2026-09-17
 
 ### Changed

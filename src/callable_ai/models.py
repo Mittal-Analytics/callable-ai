@@ -10,6 +10,7 @@ class AIModel:
 
     input_tokens_cost_usd: float
     input_tokens_cached_cost_usd: float
+    input_tokens_cache_write_cost_usd: float
     output_tokens_cost_usd: float
     output_tokens_reasoning_cost_usd: float
 
@@ -36,6 +37,10 @@ class AIModel:
     @property
     def input_tokens_cached_cost_inr(self) -> float:
         return self.usd_to_inr_rate * self.input_tokens_cached_cost_usd
+
+    @property
+    def input_tokens_cache_write_cost_inr(self) -> float:
+        return self.usd_to_inr_rate * self.input_tokens_cache_write_cost_usd
 
     @property
     def output_tokens_cost_inr(self) -> float:
